@@ -18,4 +18,5 @@ export { MoreIcon } from './MoreIcon';
 export { ContinueIcon } from './ContinueIcon';
 export { FreezeIcon } from './FreezeIcon';
 export { ChevronDownIcon } from './ChevronDownIcon';
+export { CheckIcon } from './CheckIcon';
 export type { IconProps } from './types';

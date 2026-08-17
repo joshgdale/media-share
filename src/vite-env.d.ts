@@ -3,6 +3,7 @@
 import type { AppSettings, PlaylistData, QuitEvent } from './types';
 
 interface MediaShareAPI {
+  platform: NodeJS.Platform;
   getPathForFile: (file: File) => string;
   pickMediaFiles: () => Promise<string[]>;
   pickBlankImage: () => Promise<string | null>;
@@ -15,8 +16,13 @@ interface MediaShareAPI {
   revealPlayer: () => Promise<void>;
   startPlayerResize: (edge: string) => void;
   endPlayerResize: () => void;
+  startPlayerMove: () => void;
+  endPlayerMove: () => void;
+  togglePlayerFullscreen: () => void;
+  onPlayerFullscreen: (callback: (fullscreen: boolean) => void) => () => void;
   confirmQuit: () => void;
   cancelQuit: () => void;
+  releaseQuitHold: () => void;
   onQuitEvent: (callback: (event: QuitEvent) => void) => () => void;
 }
 

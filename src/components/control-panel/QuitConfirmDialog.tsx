@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { ShortcutKeys } from '../ShortcutKeys';
 import { QUIT_HOLD_MS } from '../../types';
 
-function quitShortcutLabel(): string {
-  return navigator.platform.includes('Mac') ? '⌘Q' : 'Ctrl+Q';
+function isMacApp(): boolean {
+  return window.mediaShare.platform === 'darwin';
 }
 
 function useHoldProgress(active: boolean, durationMs: number, generation: number): number {
@@ -34,7 +35,10 @@ export function QuitConfirmDialog() {
   const [holdGeneration, setHoldGeneration] = useState(0);
   const [holdDurationMs, setHoldDurationMs] = useState(QUIT_HOLD_MS);
   const progress = useHoldProgress(holding, holdDurationMs, holdGeneration);
-  const shortcut = quitShortcutLabel();
+  const mac = isMacApp();
+  const action = mac ? 'quit' : 'close';
+  const actionLabel = mac ? 'Quit' : 'Close';
+  const modifier = mac ? 'Command' : 'Control';
 
   useEffect(() => {
     return window.mediaShare.onQuitEvent((event) => {
@@ -60,6 +64,17 @@ export function QuitConfirmDialog() {
     });
   }, []);
 
+  useEffect(() => {
+    if (!open || !holding) return;
+    const release = () => window.mediaShare.releaseQuitHold();
+    window.addEventListener('keyup', release, true);
+    window.addEventListener('blur', release);
+    return () => {
+      window.removeEventListener('keyup', release, true);
+      window.removeEventListener('blur', release);
+    };
+  }, [open, holding]);
+
   function handleCancel(): void {
     setOpen(false);
     setHolding(false);
@@ -69,20 +84,14 @@ export function QuitConfirmDialog() {
   return (
     <ConfirmDialog
       open={open}
-      title="Quit Media Share?"
-      confirmLabel={holding ? `Hold ${shortcut}` : 'Quit'}
+      title={`${actionLabel} Media Share?`}
+      confirmLabel={actionLabel}
       confirmHoldProgress={holding ? progress : undefined}
       onCancel={handleCancel}
       onConfirm={() => window.mediaShare.confirmQuit()}
     >
-      {holding ? (
-        <>
-          Keep holding {shortcut} to quit, or click Quit. Playback will stop and the output
-          window will close.
-        </>
-      ) : (
-        <>Playback will stop and the output window will close.</>
-      )}
+      Playback will stop and the output window will close. Hold{' '}
+      <ShortcutKeys keys={[modifier, 'Q']} /> to {action}, or click {actionLabel}.
     </ConfirmDialog>
   );
 }

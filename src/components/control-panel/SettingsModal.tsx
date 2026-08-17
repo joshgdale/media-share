@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   Dialog,
   DialogBackdrop,
@@ -16,7 +17,8 @@ interface SettingsModalProps {
   settings: AppSettings;
   onSettingsChange: (settings: AppSettings) => void;
   playlist: PlaylistData;
-  onImported: (imported: ParsedPlaylistFile) => void;
+  onImported: (imported: ParsedPlaylistFile) => void | Promise<void>;
+  onImportFailed: () => void;
 }
 
 const btnSecondary =
@@ -29,11 +31,24 @@ export function SettingsModal({
   onSettingsChange,
   playlist,
   onImported,
+  onImportFailed,
 }: SettingsModalProps) {
+  const [importing, setImporting] = useState(false);
+
   async function handleImport(): Promise<void> {
-    const imported = parsePlaylistFile(await window.mediaShare.importPlaylist());
-    if (!imported) return;
-    onImported(imported);
+    setImporting(true);
+    try {
+      const raw = await window.mediaShare.importPlaylist();
+      if (!raw) return;
+      const imported = parsePlaylistFile(raw);
+      if (!imported) {
+        onImportFailed();
+        return;
+      }
+      await onImported(imported);
+    } finally {
+      setImporting(false);
+    }
   }
 
   function handleExport(): void {
@@ -60,9 +75,14 @@ export function SettingsModal({
               Playlist
             </h3>
             <div className="mt-2 grid grid-cols-2 gap-1.5">
-              <button type="button" onClick={() => void handleImport()} className={`${btnSecondary} ${inkHover.cyan}`}>
+              <button
+                type="button"
+                onClick={() => void handleImport()}
+                disabled={importing}
+                className={`${btnSecondary} ${inkHover.cyan} disabled:opacity-60`}
+              >
                 <ImportIcon className="size-5" />
-                Open
+                {importing ? 'Opening…' : 'Open'}
               </button>
               <button type="button" onClick={handleExport} className={`${btnSecondary} ${inkHover.orange}`}>
                 <ExportIcon className="size-5" />

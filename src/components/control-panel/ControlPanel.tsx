@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useBroadcastChannel } from '../../hooks/useBroadcastChannel';
 import {
   isPlaylistFilePath,
@@ -21,11 +21,30 @@ import {
   type SyncMessage,
   type TransportCommand,
 } from '../../types';
+import { ToastPill, type ToastPillState } from '../ToastPill';
 import { HeaderBar } from './HeaderBar';
 import { PlaylistQueue } from './PlaylistQueue';
 import { QuitConfirmDialog } from './QuitConfirmDialog';
 import { SettingsModal } from './SettingsModal';
 import { TransportBar } from './TransportBar';
+
+const IMPORT_LOADING_MS = 320;
+const IMPORT_CLOSE_MS = 550;
+const TOAST_DISMISS_MS = 2200;
+
+function yieldToPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
 
 export function ControlPanel() {
   const [playlist, setPlaylist] = useState<PlaylistData>(DEFAULT_PLAYLIST);
@@ -33,6 +52,10 @@ export function ControlPanel() {
   const [playerState, setPlayerState] = useState<PlayerState>(DEFAULT_PLAYER_STATE);
   const [ready, setReady] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [toast, setToast] = useState<ToastPillState | null>(null);
+  const importGenRef = useRef(0);
+  const toastCloseTimerRef = useRef<number | null>(null);
+  const toastDismissTimerRef = useRef<number | null>(null);
 
   const post = useBroadcastChannel((message: SyncMessage) => {
     switch (message.type) {
@@ -77,13 +100,11 @@ export function ControlPanel() {
   useEffect(() => {
     return window.mediaShare.onPlaylistOpened((raw) => {
       const imported = parsePlaylistFile(raw);
-      if (!imported) return;
-      setPlaylist({
-        ...imported.playlist,
-        cues: normalizeCues(imported.playlist.cues),
-      });
-      if (imported.settings) setSettings(imported.settings);
-      setSettingsOpen(false);
+      if (!imported) {
+        showImportError();
+        return;
+      }
+      void applyImported(imported);
     });
   }, []);
 
@@ -101,6 +122,66 @@ export function ControlPanel() {
     return () => window.clearTimeout(timer);
   }, [settings, ready, post]);
 
+  useEffect(() => {
+    return () => {
+      if (toastCloseTimerRef.current != null) window.clearTimeout(toastCloseTimerRef.current);
+      if (toastDismissTimerRef.current != null) window.clearTimeout(toastDismissTimerRef.current);
+    };
+  }, []);
+
+  function clearToastTimers(): void {
+    if (toastCloseTimerRef.current != null) {
+      window.clearTimeout(toastCloseTimerRef.current);
+      toastCloseTimerRef.current = null;
+    }
+    if (toastDismissTimerRef.current != null) {
+      window.clearTimeout(toastDismissTimerRef.current);
+      toastDismissTimerRef.current = null;
+    }
+  }
+
+  function showImportError(): void {
+    const gen = ++importGenRef.current;
+    clearToastTimers();
+    setToast({ kind: 'error', message: "Couldn't open playlist" });
+    toastDismissTimerRef.current = window.setTimeout(() => {
+      if (gen !== importGenRef.current) return;
+      setToast(null);
+    }, TOAST_DISMISS_MS);
+  }
+
+  async function applyImported(imported: ParsedPlaylistFile): Promise<void> {
+    const gen = ++importGenRef.current;
+    clearToastTimers();
+    setToast({ kind: 'loading', message: 'Opening playlist…' });
+    await Promise.all([yieldToPaint(), wait(IMPORT_LOADING_MS)]);
+    if (gen !== importGenRef.current) return;
+
+    setPlaylist({
+      ...imported.playlist,
+      cues: normalizeCues(imported.playlist.cues),
+    });
+    if (imported.settings) {
+      setSettings(imported.settings);
+    }
+
+    const name = imported.playlist.name.trim();
+    setToast({
+      kind: 'success',
+      message: name ? `Imported “${name}”` : 'Playlist imported',
+    });
+
+    toastCloseTimerRef.current = window.setTimeout(() => {
+      if (gen !== importGenRef.current) return;
+      setSettingsOpen(false);
+    }, IMPORT_CLOSE_MS);
+
+    toastDismissTimerRef.current = window.setTimeout(() => {
+      if (gen !== importGenRef.current) return;
+      setToast(null);
+    }, TOAST_DISMISS_MS);
+  }
+
   async function addMediaFromPaths(paths: string[]): Promise<void> {
     let playlistPath: string | undefined;
     for (const filePath of paths) {
@@ -108,7 +189,11 @@ export function ControlPanel() {
     }
     if (playlistPath) {
       const imported = parsePlaylistFile(await window.mediaShare.readPlaylistFile(playlistPath));
-      if (imported) handleImported(imported);
+      if (imported) {
+        await applyImported(imported);
+      } else {
+        showImportError();
+      }
       return;
     }
 
@@ -136,17 +221,6 @@ export function ControlPanel() {
   async function handleAddMedia(): Promise<void> {
     const paths = await window.mediaShare.pickMediaFiles();
     await addMediaFromPaths(paths);
-  }
-
-  function handleImported(imported: ParsedPlaylistFile): void {
-    setPlaylist({
-      ...imported.playlist,
-      cues: normalizeCues(imported.playlist.cues),
-    });
-    if (imported.settings) {
-      setSettings(imported.settings);
-    }
-    setSettingsOpen(false);
   }
 
   function handleCommand(command: TransportCommand): void {
@@ -191,8 +265,10 @@ export function ControlPanel() {
         settings={settings}
         onSettingsChange={setSettings}
         playlist={playlist}
-        onImported={handleImported}
+        onImported={(imported) => applyImported(imported)}
+        onImportFailed={showImportError}
       />
+      <ToastPill toast={toast} />
       <QuitConfirmDialog />
     </div>
   );

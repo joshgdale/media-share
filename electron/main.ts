@@ -4,6 +4,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  nativeImage,
   nativeTheme,
   protocol,
   screen,
@@ -18,6 +19,11 @@ import {
 } from '../src/lib/playlist-file';
 import { normalizeSettings } from '../src/lib/settings';
 import { QUIT_HOLD_MS, type AppSettings, type PlaylistData, type QuitEvent } from '../src/types';
+import squirrelStartup from 'electron-squirrel-startup';
+
+if (squirrelStartup) {
+  app.quit();
+}
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
@@ -58,6 +64,23 @@ let controlRendererReady = false;
 
 function preloadPath(): string {
   return path.join(__dirname, 'preload.js');
+}
+
+function windowIconPath(): string {
+  const icons = path.join(__dirname, '..', 'icons');
+  switch (process.platform) {
+    case 'darwin':
+      return path.join(icons, 'macos', 'icon.icns');
+    case 'win32':
+      return path.join(icons, 'windows', 'icon.ico');
+    default:
+      return path.join(icons, 'linux', 'icons', '512x512.png');
+  }
+}
+
+function appIconImage(): Electron.NativeImage | undefined {
+  const image = nativeImage.createFromPath(windowIconPath());
+  return image.isEmpty() ? undefined : image;
 }
 
 function settingsPath(): string {
@@ -153,13 +176,18 @@ async function loadWindowState(): Promise<StoredWindowState> {
   return readJsonFile<StoredWindowState>(windowStatePath(), {});
 }
 
+function persistedBounds(win: BrowserWindow): WindowBounds {
+  const bounds = win.getNormalBounds();
+  return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+}
+
 async function saveWindowState(): Promise<void> {
   const state: StoredWindowState = {};
   if (controlPanelWindow && !controlPanelWindow.isDestroyed()) {
-    state.control = controlPanelWindow.getBounds();
+    state.control = persistedBounds(controlPanelWindow);
   }
   if (mediaPlayerWindow && !mediaPlayerWindow.isDestroyed()) {
-    state.output = mediaPlayerWindow.getBounds();
+    state.output = persistedBounds(mediaPlayerWindow);
   }
   await writeJsonFile(windowStatePath(), state);
 }
@@ -207,7 +235,15 @@ interface PlayerResizeSession {
   timer: ReturnType<typeof setInterval>;
 }
 
+interface PlayerMoveSession {
+  win: BrowserWindow;
+  startMouse: { x: number; y: number };
+  startBounds: Electron.Rectangle;
+  timer: ReturnType<typeof setInterval>;
+}
+
 let playerResize: PlayerResizeSession | null = null;
+let playerMove: PlayerMoveSession | null = null;
 
 function clampPlayerSize(width: number): { width: number; height: number } {
   let nextWidth = Math.max(PLAYER_MIN_WIDTH, width);
@@ -255,14 +291,62 @@ function boundsForPlayerResize(
 function stopPlayerResize(): void {
   if (!playerResize) return;
   clearInterval(playerResize.timer);
-  if (!playerResize.win.isDestroyed()) {
+  if (!playerResize.win.isDestroyed() && !playerResize.win.isFullScreen()) {
     playerResize.win.setAspectRatio(PLAYER_ASPECT);
   }
   playerResize = null;
 }
 
-function startPlayerResize(win: BrowserWindow, edge: PlayerResizeEdge): void {
+function stopPlayerMove(): void {
+  if (!playerMove) return;
+  clearInterval(playerMove.timer);
+  playerMove = null;
+}
+
+function stopPlayerChrome(): void {
   stopPlayerResize();
+  stopPlayerMove();
+}
+
+function startPlayerMove(win: BrowserWindow): void {
+  if (win.isFullScreen()) return;
+  stopPlayerChrome();
+  const startMouse = screen.getCursorScreenPoint();
+  const startBounds = win.getBounds();
+  playerMove = {
+    win,
+    startMouse,
+    startBounds,
+    timer: setInterval(() => {
+      const session = playerMove;
+      if (!session || session.win.isDestroyed() || session.win.isFullScreen()) {
+        stopPlayerMove();
+        return;
+      }
+      const mouse = screen.getCursorScreenPoint();
+      session.win.setPosition(
+        session.startBounds.x + (mouse.x - session.startMouse.x),
+        session.startBounds.y + (mouse.y - session.startMouse.y),
+      );
+    }, 16),
+  };
+}
+
+function togglePlayerFullscreen(win: BrowserWindow): void {
+  stopPlayerChrome();
+  const next = !win.isFullScreen();
+  if (next) win.setAspectRatio(0);
+  win.setFullScreen(next);
+}
+
+function sendPlayerFullscreen(win: BrowserWindow): void {
+  if (win.isDestroyed()) return;
+  win.webContents.send('player:fullscreen', win.isFullScreen());
+}
+
+function startPlayerResize(win: BrowserWindow, edge: PlayerResizeEdge): void {
+  if (win.isFullScreen()) return;
+  stopPlayerChrome();
   win.setAspectRatio(0);
   playerResize = {
     win,
@@ -472,10 +556,11 @@ function sendQuitEvent(event: QuitEvent): void {
   controlPanelWindow.webContents.send('app:quit-event', event);
 }
 
-function focusControlPanel(): void {
+function revealControlPanel(): void {
   if (!controlPanelWindow || controlPanelWindow.isDestroyed()) return;
   if (controlPanelWindow.isMinimized()) controlPanelWindow.restore();
   if (!controlPanelWindow.isVisible()) controlPanelWindow.show();
+  controlPanelWindow.moveTop();
   if (!controlPanelWindow.isFocused()) controlPanelWindow.focus();
 }
 
@@ -483,7 +568,10 @@ function stopQuitHold(notify = true): void {
   if (!quitHoldTimer) return;
   clearTimeout(quitHoldTimer);
   quitHoldTimer = null;
-  if (notify && quitPromptVisible) sendQuitEvent({ type: 'hold-stop' });
+  if (notify && quitPromptVisible) {
+    sendQuitEvent({ type: 'hold-stop' });
+    revealControlPanel();
+  }
 }
 
 function startQuitHold(): boolean {
@@ -499,7 +587,8 @@ function promptQuit(mode: 'confirm' | 'hold'): void {
   if (allowQuit) return;
   const already = quitPromptVisible;
   quitPromptVisible = true;
-  focusControlPanel();
+  // Raising/focusing the window during a hold swallows the matching key-up.
+  if (mode === 'confirm') revealControlPanel();
 
   if (mode === 'hold') {
     const started = startQuitHold();
@@ -530,32 +619,46 @@ function cancelQuitPrompt(): void {
   quitPromptVisible = false;
 }
 
-function isQuitShortcut(input: Electron.Input): boolean {
-  if (input.key.toLowerCase() !== 'q') return false;
-  if (input.shift || input.alt) return false;
-  return process.platform === 'darwin' ? input.meta : input.control;
+function isKeyDown(input: Electron.Input): boolean {
+  return input.type === 'keyDown' || input.type === 'rawKeyDown';
 }
 
-function isQuitHoldRelease(input: Electron.Input): boolean {
-  if (input.type !== 'keyUp') return false;
-  const key = input.key.toLowerCase();
-  const code = input.code;
-  if (key === 'q' || code === 'KeyQ') return true;
-  if (process.platform === 'darwin') {
-    return key === 'meta' || code === 'MetaLeft' || code === 'MetaRight';
-  }
-  return key === 'control' || code === 'ControlLeft' || code === 'ControlRight';
+function inputKey(input: Electron.Input): string {
+  return (input.key ?? '').toLowerCase();
+}
+
+function isQuitShortcut(input: Electron.Input): boolean {
+  const key = inputKey(input);
+  const isQ = key === 'q' || input.code === 'KeyQ';
+  if (!isQ || input.shift || input.alt) return false;
+  return process.platform === 'darwin' ? input.meta : input.control;
 }
 
 function attachQuitKeyListener(win: BrowserWindow): void {
   win.webContents.on('before-input-event', (event, input) => {
-    if (input.type === 'keyDown' && isQuitShortcut(input)) {
+    if (
+      process.platform !== 'darwin' &&
+      win === mediaPlayerWindow &&
+      isKeyDown(input) &&
+      inputKey(input) === 'escape' &&
+      !input.alt &&
+      !input.control &&
+      !input.meta &&
+      !input.shift &&
+      win.isFullScreen()
+    ) {
       event.preventDefault();
+      win.setFullScreen(false);
+      return;
+    }
+    if (isKeyDown(input) && isQuitShortcut(input)) {
+      // Do not preventDefault: Chromium then drops the matching key-up
+      // (https://github.com/electron/electron/issues/37336), so a tap looks like a hold.
       if (!input.isAutoRepeat) promptQuit('hold');
       return;
     }
     if (!quitHoldTimer) return;
-    if (isQuitHoldRelease(input) || (input.type === 'keyDown' && input.key === 'Escape')) {
+    if (input.type === 'keyUp' || (isKeyDown(input) && inputKey(input) === 'escape')) {
       stopQuitHold();
     }
   });
@@ -564,10 +667,14 @@ function attachQuitKeyListener(win: BrowserWindow): void {
 function setApplicationMenu(): void {
   const isMac = process.platform === 'darwin';
   const quitItem: Electron.MenuItemConstructorOptions = {
-    label: `Quit ${app.name}`,
-    accelerator: 'CmdOrCtrl+Q',
-    click: (_item, _win, event) => {
-      promptQuit(event?.triggeredByAccelerator ? 'hold' : 'confirm');
+    label: isMac ? `Quit ${app.name}` : `Close ${app.name}`,
+    // macOS menu accelerators swallow the matching key-up, which makes hold-to-quit
+    // look like a tap. Handle Command/Control+Q in before-input-event instead.
+    ...(!isMac
+      ? { accelerator: 'CmdOrCtrl+Q', registerAccelerator: false }
+      : {}),
+    click: () => {
+      promptQuit('confirm');
     },
   };
 
@@ -607,6 +714,10 @@ async function createWindows(): Promise<void> {
 
   const preload = preloadPath();
   const isDark = nativeTheme.shouldUseDarkColors;
+  const icon = appIconImage();
+  if (icon && process.platform === 'darwin') {
+    app.dock?.setIcon(icon);
+  }
   const webPreferences: Electron.WebPreferences = {
     preload,
     contextIsolation: true,
@@ -624,6 +735,7 @@ async function createWindows(): Promise<void> {
     minHeight: 640,
     backgroundColor: isDark ? '#0a0a0a' : '#f4f4f5',
     autoHideMenuBar: true,
+    icon,
     webPreferences,
   });
 
@@ -643,12 +755,14 @@ async function createWindows(): Promise<void> {
     skipTaskbar: false,
     show: false,
     movable: true,
+    fullscreenable: true,
     // Native edge-resize on a frameless macOS window eats the outer pixels
     // (and often click-throughs when the window is not key). Custom handles
     // still resize via setBounds.
     resizable: false,
     autoHideMenuBar: true,
     backgroundColor: '#000000',
+    icon,
     webPreferences,
   });
 
@@ -661,8 +775,26 @@ async function createWindows(): Promise<void> {
   persistWindow(mediaPlayerWindow);
   attachQuitKeyListener(controlPanelWindow);
   attachQuitKeyListener(mediaPlayerWindow);
+  mediaPlayerWindow.on('enter-full-screen', () => {
+    stopPlayerChrome();
+    if (mediaPlayerWindow && !mediaPlayerWindow.isDestroyed()) {
+      mediaPlayerWindow.setAspectRatio(0);
+      sendPlayerFullscreen(mediaPlayerWindow);
+    }
+  });
+  mediaPlayerWindow.on('leave-full-screen', () => {
+    if (mediaPlayerWindow && !mediaPlayerWindow.isDestroyed()) {
+      mediaPlayerWindow.setAspectRatio(PLAYER_ASPECT);
+      sendPlayerFullscreen(mediaPlayerWindow);
+    }
+  });
+  mediaPlayerWindow.webContents.on('did-finish-load', () => {
+    if (mediaPlayerWindow && !mediaPlayerWindow.isDestroyed()) {
+      sendPlayerFullscreen(mediaPlayerWindow);
+    }
+  });
   mediaPlayerWindow.on('closed', () => {
-    stopPlayerResize();
+    stopPlayerChrome();
   });
 
   controlPanelWindow.on('page-title-updated', (event) => {
@@ -802,6 +934,22 @@ function registerIpc(): void {
     stopPlayerResize();
   });
 
+  ipcMain.on('player:move-start', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win !== mediaPlayerWindow || win.isDestroyed()) return;
+    startPlayerMove(win);
+  });
+
+  ipcMain.on('player:move-end', () => {
+    stopPlayerMove();
+  });
+
+  ipcMain.on('player:toggle-fullscreen', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win !== mediaPlayerWindow || win.isDestroyed()) return;
+    togglePlayerFullscreen(win);
+  });
+
   ipcMain.on('app:quit-confirm', () => {
     finishQuit();
   });
@@ -809,9 +957,16 @@ function registerIpc(): void {
   ipcMain.on('app:quit-cancel', () => {
     cancelQuitPrompt();
   });
+
+  ipcMain.on('app:quit-hold-release', () => {
+    stopQuitHold();
+  });
 }
 
 app.setName('Media Share');
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.squirrel.MediaShare.MediaShare');
+}
 
 app.on('open-file', (event, filePath) => {
   event.preventDefault();
@@ -838,6 +993,12 @@ if (!isPrimaryInstance) {
 
     registerIpc();
     setApplicationMenu();
+    if (process.platform === 'darwin') {
+      app.setAboutPanelOptions({
+        applicationName: app.name,
+        iconPath: windowIconPath(),
+      });
+    }
     await removeLegacyPlaylist();
     const launchPlaylist = playlistPathsFromArgv(process.argv).at(-1);
     if (launchPlaylist) {
@@ -852,6 +1013,12 @@ if (!isPrimaryInstance) {
       void saveWindowState();
       return;
     }
+    event.preventDefault();
+    if (!quitPromptVisible) promptQuit('confirm');
+  });
+
+  app.on('will-quit', (event) => {
+    if (allowQuit) return;
     event.preventDefault();
     if (!quitPromptVisible) promptQuit('confirm');
   });

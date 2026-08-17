@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { AppSettings, PlaylistData, QuitEvent } from '../src/types';
 
 const api = {
+  platform: process.platform,
   getPathForFile: (file: File): string => {
     try {
       return webUtils.getPathForFile(file);
@@ -32,8 +33,21 @@ const api = {
   revealPlayer: (): Promise<void> => ipcRenderer.invoke('player:reveal'),
   startPlayerResize: (edge: string): void => ipcRenderer.send('player:resize-start', edge),
   endPlayerResize: (): void => ipcRenderer.send('player:resize-end'),
+  startPlayerMove: (): void => ipcRenderer.send('player:move-start'),
+  endPlayerMove: (): void => ipcRenderer.send('player:move-end'),
+  togglePlayerFullscreen: (): void => ipcRenderer.send('player:toggle-fullscreen'),
+  onPlayerFullscreen: (callback: (fullscreen: boolean) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, fullscreen: unknown) => {
+      callback(fullscreen === true);
+    };
+    ipcRenderer.on('player:fullscreen', listener);
+    return () => {
+      ipcRenderer.removeListener('player:fullscreen', listener);
+    };
+  },
   confirmQuit: (): void => ipcRenderer.send('app:quit-confirm'),
   cancelQuit: (): void => ipcRenderer.send('app:quit-cancel'),
+  releaseQuitHold: (): void => ipcRenderer.send('app:quit-hold-release'),
   onQuitEvent: (callback: (event: QuitEvent) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, data: QuitEvent) => {
       callback(data);

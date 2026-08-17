@@ -63,7 +63,7 @@ export function ConfirmDialog({
                 <DialogTitle className="text-base font-bold tracking-tight text-base-950 dark:text-paper">
                   {title}
                 </DialogTitle>
-                <p className={`mt-2 text-sm tracking-tight ${muted}`}>{children}</p>
+                <div className={`mt-2 text-sm tracking-tight ${muted}`}>{children}</div>
                 <div className="mt-4 flex justify-end gap-1.5">
                   <button
                     type="button"

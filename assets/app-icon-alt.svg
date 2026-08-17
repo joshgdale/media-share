@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
+  <title>Media Share</title>
+  <desc>Play mark built from a stack of playlist cues</desc>
+
+  <rect width="1024" height="1024" fill="#100f0f" />
+
+  <defs>
+    <clipPath id="play">
+      <polygon points="268,196 828,512 268,828" />
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#play)">
+    <rect x="268" y="196" width="560" height="101" fill="#dad8ce" />
+    <rect x="268" y="329" width="560" height="101" fill="#e6e4d9" />
+    <rect x="268" y="462" width="560" height="101" fill="#879a39" />
+    <rect x="268" y="595" width="560" height="101" fill="#fffcf0" />
+    <rect x="268" y="728" width="560" height="100" fill="#cecdc3" />
+  </g>
+</svg>
