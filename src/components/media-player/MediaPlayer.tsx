@@ -890,12 +890,21 @@ export function MediaPlayer() {
       case 'requestState':
         postRef.current({ type: 'playerState', state: stateRef.current });
         break;
-      case 'playlist':
+      case 'playlist': {
         playlistRef.current = {
           ...message.playlist,
           cues: normalizeCues(message.playlist.cues),
         };
+        const currentId = stateRef.current.currentCueId;
+        if (currentId == null) break;
+        const index = playlistRef.current.cues.findIndex((cue) => cue.id === currentId);
+        if (index < 0) {
+          goBlank();
+          break;
+        }
+        currentIndexRef.current = index;
         break;
+      }
       case 'settings':
         setSettings(message.settings);
         break;

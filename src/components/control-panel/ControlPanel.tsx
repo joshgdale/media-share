@@ -263,12 +263,15 @@ export function ControlPanel() {
             cues: prev.cues.map((item) => (item.id === cue.id ? cue : item)),
           }))
         }
-        onCueDelete={(id) =>
+        onCueDelete={(id) => {
+          if (playerState.currentCueId === id) {
+            post({ type: 'transport', command: { action: 'stop' } });
+          }
           setPlaylist((prev) => ({
             ...prev,
             cues: prev.cues.filter((item) => item.id !== id),
-          }))
-        }
+          }));
+        }}
         onTrigger={(cueId) => {
           void window.mediaShare.revealPlayer();
           post({ type: 'triggerCue', cueId });
