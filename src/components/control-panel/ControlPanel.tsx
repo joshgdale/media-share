@@ -79,9 +79,15 @@ export function ControlPanel() {
         const persisted = await window.mediaShare.loadPersisted();
         if (cancelled) return;
         const opened = parsePlaylistFile(persisted.openedPlaylist);
-        const nextPlaylist = opened
+        let nextPlaylist = opened
           ? { ...opened.playlist, cues: normalizeCues(opened.playlist.cues) }
           : DEFAULT_PLAYLIST;
+        if (persisted.openedMedia?.length > 0) {
+          const extra = await cuesFromPaths(persisted.openedMedia);
+          if (extra.length > 0) {
+            nextPlaylist = { ...nextPlaylist, cues: [...nextPlaylist.cues, ...extra] };
+          }
+        }
         const nextSettings = opened?.settings ?? persisted.settings;
         setPlaylist(nextPlaylist);
         setSettings(nextSettings);
@@ -98,7 +104,7 @@ export function ControlPanel() {
   }, [post]);
 
   useEffect(() => {
-    return window.mediaShare.onPlaylistOpened((raw) => {
+    const stopPlaylist = window.mediaShare.onPlaylistOpened((raw) => {
       const imported = parsePlaylistFile(raw);
       if (!imported) {
         showImportError();
@@ -106,6 +112,13 @@ export function ControlPanel() {
       }
       void applyImported(imported);
     });
+    const stopMedia = window.mediaShare.onMediaOpened((paths) => {
+      void addMediaFromPaths(paths);
+    });
+    return () => {
+      stopPlaylist();
+      stopMedia();
+    };
   }, []);
 
   useEffect(() => {
@@ -182,21 +195,7 @@ export function ControlPanel() {
     }, TOAST_DISMISS_MS);
   }
 
-  async function addMediaFromPaths(paths: string[]): Promise<void> {
-    let playlistPath: string | undefined;
-    for (const filePath of paths) {
-      if (isPlaylistFilePath(filePath)) playlistPath = filePath;
-    }
-    if (playlistPath) {
-      const imported = parsePlaylistFile(await window.mediaShare.readPlaylistFile(playlistPath));
-      if (imported) {
-        await applyImported(imported);
-      } else {
-        showImportError();
-      }
-      return;
-    }
-
+  async function cuesFromPaths(paths: string[]): Promise<CueItem[]> {
     const created = await Promise.all(
       paths.map(async (src): Promise<CueItem | null> => {
         const type = mediaTypeFromPath(src);
@@ -213,7 +212,25 @@ export function ControlPanel() {
         };
       }),
     );
-    const cues = created.filter((cue): cue is CueItem => cue !== null);
+    return created.filter((cue): cue is CueItem => cue !== null);
+  }
+
+  async function addMediaFromPaths(paths: string[]): Promise<void> {
+    let playlistPath: string | undefined;
+    for (const filePath of paths) {
+      if (isPlaylistFilePath(filePath)) playlistPath = filePath;
+    }
+    if (playlistPath) {
+      const imported = parsePlaylistFile(await window.mediaShare.readPlaylistFile(playlistPath));
+      if (imported) {
+        await applyImported(imported);
+      } else {
+        showImportError();
+      }
+      return;
+    }
+
+    const cues = await cuesFromPaths(paths);
     if (cues.length === 0) return;
     setPlaylist((prev) => ({ ...prev, cues: [...prev.cues, ...cues] }));
   }

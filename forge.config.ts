@@ -9,6 +9,15 @@ import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import type { ForgeConfig } from '@electron-forge/shared-types';
 import { FuseV1Options, FuseVersion } from '@electron/fuses';
 
+import {
+  IMAGE_EXTENSIONS,
+  MEDIA_OPEN_MIME_TYPES,
+  VIDEO_EXTENSIONS,
+} from './src/types';
+
+const imageExtensions = [...IMAGE_EXTENSIONS];
+const videoExtensions = [...VIDEO_EXTENSIONS];
+
 const packagedPaths = new Set(['/package.json', '/dist', '/dist-electron', '/icons']);
 
 function ignorePackagedPath(filePath: string): boolean {
@@ -51,6 +60,33 @@ const config: ForgeConfig = {
           LSHandlerRank: 'Owner',
           LSItemContentTypes: ['com.joshgdale.media-share.playlist'],
         },
+        {
+          CFBundleTypeExtensions: imageExtensions,
+          CFBundleTypeName: 'Image',
+          CFBundleTypeRole: 'Viewer',
+          LSHandlerRank: 'Alternate',
+          LSItemContentTypes: [
+            'public.png',
+            'public.jpeg',
+            'com.compuserve.gif',
+            'com.microsoft.bmp',
+            'org.webmproject.webp',
+          ],
+        },
+        {
+          CFBundleTypeExtensions: videoExtensions,
+          CFBundleTypeName: 'Movie',
+          CFBundleTypeRole: 'Viewer',
+          LSHandlerRank: 'Alternate',
+          LSItemContentTypes: [
+            'public.mpeg-4',
+            'com.apple.m4v-video',
+            'com.apple.quicktime-movie',
+            'public.avi',
+            'org.webmproject.webm',
+            'org.matroska.mkv',
+          ],
+        },
       ],
       UTExportedTypeDeclarations: [
         {
@@ -60,6 +96,35 @@ const config: ForgeConfig = {
           UTTypeTagSpecification: {
             'public.filename-extension': ['msplaylist'],
             'public.mime-type': ['application/json'],
+          },
+        },
+      ],
+      UTImportedTypeDeclarations: [
+        {
+          UTTypeConformsTo: ['public.image'],
+          UTTypeDescription: 'WebP Image',
+          UTTypeIdentifier: 'org.webmproject.webp',
+          UTTypeTagSpecification: {
+            'public.filename-extension': ['webp'],
+            'public.mime-type': ['image/webp'],
+          },
+        },
+        {
+          UTTypeConformsTo: ['public.movie'],
+          UTTypeDescription: 'WebM Video',
+          UTTypeIdentifier: 'org.webmproject.webm',
+          UTTypeTagSpecification: {
+            'public.filename-extension': ['webm'],
+            'public.mime-type': ['video/webm'],
+          },
+        },
+        {
+          UTTypeConformsTo: ['public.movie'],
+          UTTypeDescription: 'Matroska Video',
+          UTTypeIdentifier: 'org.matroska.mkv',
+          UTTypeTagSpecification: {
+            'public.filename-extension': ['mkv'],
+            'public.mime-type': ['video/x-matroska'],
           },
         },
       ],
@@ -77,8 +142,14 @@ const config: ForgeConfig = {
       name: 'MediaShare',
       setupIcon: 'icons/windows/icon.ico',
     }),
-    new MakerDeb({ options: { icon: 'icons/linux/icons/512x512.png' } }, ['linux']),
-    new MakerRpm({ options: { icon: 'icons/linux/icons/512x512.png' } }, ['linux']),
+    new MakerDeb(
+      { options: { icon: 'icons/linux/icons/512x512.png', mimeType: [...MEDIA_OPEN_MIME_TYPES] } },
+      ['linux'],
+    ),
+    new MakerRpm(
+      { options: { icon: 'icons/linux/icons/512x512.png', mimeType: [...MEDIA_OPEN_MIME_TYPES] } },
+      ['linux'],
+    ),
   ],
   plugins: [
     new FusesPlugin({

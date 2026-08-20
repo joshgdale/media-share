@@ -11,7 +11,12 @@ interface MediaShareAPI {
   importPlaylist: () => Promise<unknown>;
   readPlaylistFile: (filePath: string) => Promise<unknown>;
   onPlaylistOpened: (callback: (data: unknown) => void) => () => void;
-  loadPersisted: () => Promise<{ settings: AppSettings; openedPlaylist: unknown | null }>;
+  onMediaOpened: (callback: (paths: string[]) => void) => () => void;
+  loadPersisted: () => Promise<{
+    settings: AppSettings;
+    openedPlaylist: unknown | null;
+    openedMedia: string[];
+  }>;
   saveSettings: (settings: AppSettings) => Promise<void>;
   revealPlayer: () => Promise<void>;
   startPlayerResize: (edge: string) => void;

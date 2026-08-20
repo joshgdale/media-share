@@ -26,8 +26,21 @@ const api = {
       ipcRenderer.removeListener('playlist:opened', listener);
     };
   },
-  loadPersisted: (): Promise<{ settings: AppSettings; openedPlaylist: unknown | null }> =>
-    ipcRenderer.invoke('persist:load'),
+  onMediaOpened: (callback: (paths: string[]) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, paths: unknown) => {
+      if (!Array.isArray(paths)) return;
+      callback(paths.filter((path): path is string => typeof path === 'string'));
+    };
+    ipcRenderer.on('media:opened', listener);
+    return () => {
+      ipcRenderer.removeListener('media:opened', listener);
+    };
+  },
+  loadPersisted: (): Promise<{
+    settings: AppSettings;
+    openedPlaylist: unknown | null;
+    openedMedia: string[];
+  }> => ipcRenderer.invoke('persist:load'),
   saveSettings: (settings: AppSettings): Promise<void> =>
     ipcRenderer.invoke('persist:save-settings', settings),
   revealPlayer: (): Promise<void> => ipcRenderer.invoke('player:reveal'),

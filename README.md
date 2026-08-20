@@ -45,6 +45,8 @@ Drag files onto the queue, or use **Add media**.
 
 Save and open playlists from Settings. You can also open a `.msplaylist` file directly.
 
+Finder’s **Open With** menu includes Media Share for supported videos and images. Opening a file that way adds it to the current playlist.
+
 ## Distribute
 
 Run these commands on the OS you want to install on. Native installers (DMG, Squirrel, deb, rpm) have to be built on that platform.

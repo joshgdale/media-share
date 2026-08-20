@@ -12,14 +12,24 @@ import {
 import { createReadStream, type ReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import squirrelStartup from 'electron-squirrel-startup';
 import {
   isPlaylistFilePath,
   PLAYLIST_DIALOG_FILTERS,
   playlistSaveFileName,
 } from '../src/lib/playlist-file';
 import { normalizeSettings } from '../src/lib/settings';
-import { QUIT_HOLD_MS, type AppSettings, type PlaylistData, type QuitEvent } from '../src/types';
-import squirrelStartup from 'electron-squirrel-startup';
+import {
+  IMAGE_EXTENSIONS,
+  QUIT_HOLD_MS,
+  VIDEO_EXTENSIONS,
+  type AppSettings,
+  type PlaylistData,
+  type QuitEvent,
+} from '../src/types';
+
+const VIDEO_DIALOG_EXTENSIONS = [...VIDEO_EXTENSIONS];
+const IMAGE_DIALOG_EXTENSIONS = [...IMAGE_EXTENSIONS];
 
 if (squirrelStartup) {
   app.quit();
@@ -60,6 +70,9 @@ let allowQuit = false;
 let quitPromptVisible = false;
 let quitHoldTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingOpenedPlaylist: unknown | null = null;
+let pendingOpenedMedia: string[] = [];
+let openedMediaFlush: ReturnType<typeof setTimeout> | null = null;
+const openedMediaBuffer: string[] = [];
 let controlRendererReady = false;
 
 function preloadPath(): string {
@@ -103,16 +116,77 @@ function playlistPathsFromArgv(argv: string[]): string[] {
   return argv.filter((arg) => typeof arg === 'string' && isPlaylistFilePath(arg));
 }
 
+function isMediaFilePath(filePath: string): boolean {
+  const base = filePath.split(/[/\\]/).pop() ?? filePath;
+  const dot = base.lastIndexOf('.');
+  const ext = dot >= 0 ? base.slice(dot + 1).toLowerCase() : '';
+  return VIDEO_EXTENSIONS.has(ext) || IMAGE_EXTENSIONS.has(ext);
+}
+
+function mediaPathsFromArgv(argv: string[]): string[] {
+  return argv.filter((arg) => typeof arg === 'string' && isMediaFilePath(arg));
+}
+
+function takeOpenedMediaBuffer(): string[] {
+  if (openedMediaFlush) {
+    clearTimeout(openedMediaFlush);
+    openedMediaFlush = null;
+  }
+  return openedMediaBuffer.splice(0);
+}
+
+function rememberOpenedMedia(paths: string[]): void {
+  for (const filePath of paths) {
+    if (!isMediaFilePath(filePath)) continue;
+    if (!pendingOpenedMedia.includes(filePath)) pendingOpenedMedia.push(filePath);
+  }
+}
+
+function sendOpenedMedia(paths: string[]): void {
+  const unique = [...new Set(paths.filter(isMediaFilePath))];
+  if (unique.length === 0) return;
+  if (controlRendererReady && controlPanelWindow && !controlPanelWindow.isDestroyed()) {
+    controlPanelWindow.webContents.send('media:opened', unique);
+    revealControlPanel();
+    return;
+  }
+  rememberOpenedMedia(unique);
+}
+
+function queueOpenedMedia(paths: string[]): void {
+  openedMediaBuffer.push(...paths);
+  if (openedMediaFlush) clearTimeout(openedMediaFlush);
+  openedMediaFlush = setTimeout(() => {
+    openedMediaFlush = null;
+    sendOpenedMedia(openedMediaBuffer.splice(0));
+  }, 50);
+}
+
 async function ingestPlaylistFile(filePath: string): Promise<void> {
   if (!isPlaylistFilePath(filePath)) return;
   const data = await readJsonFile<unknown>(filePath, null);
   if (data == null) return;
   if (controlRendererReady && controlPanelWindow && !controlPanelWindow.isDestroyed()) {
     controlPanelWindow.webContents.send('playlist:opened', data);
-    controlPanelWindow.show();
+    revealControlPanel();
     return;
   }
   pendingOpenedPlaylist = data;
+}
+
+async function ingestOpenedPath(filePath: string): Promise<void> {
+  if (isPlaylistFilePath(filePath)) {
+    await ingestPlaylistFile(filePath);
+    return;
+  }
+  queueOpenedMedia([filePath]);
+}
+
+async function ingestArgv(argv: string[]): Promise<void> {
+  const lastPlaylist = playlistPathsFromArgv(argv).at(-1);
+  if (lastPlaylist) await ingestPlaylistFile(lastPlaylist);
+  const media = mediaPathsFromArgv(argv);
+  if (media.length) queueOpenedMedia(media);
 }
 
 async function readJsonFile<T>(file: string, fallback: T): Promise<T> {
@@ -838,23 +912,10 @@ function registerIpc(): void {
       filters: [
         {
           name: 'Media',
-          extensions: [
-            'mp4',
-            'mov',
-            'webm',
-            'mkv',
-            'm4v',
-            'avi',
-            'png',
-            'jpg',
-            'jpeg',
-            'webp',
-            'gif',
-            'bmp',
-          ],
+          extensions: [...VIDEO_DIALOG_EXTENSIONS, ...IMAGE_DIALOG_EXTENSIONS],
         },
-        { name: 'Video', extensions: ['mp4', 'mov', 'webm', 'mkv', 'm4v', 'avi'] },
-        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] },
+        { name: 'Video', extensions: VIDEO_DIALOG_EXTENSIONS },
+        { name: 'Images', extensions: IMAGE_DIALOG_EXTENSIONS },
       ],
     });
     return result.canceled ? [] : result.filePaths;
@@ -864,7 +925,7 @@ function registerIpc(): void {
     const result = await dialog.showOpenDialog({
       title: 'Choose blank still',
       properties: ['openFile'],
-      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }],
+      filters: [{ name: 'Images', extensions: IMAGE_DIALOG_EXTENSIONS }],
     });
     if (result.canceled || result.filePaths.length === 0) {
       return null;
@@ -905,13 +966,17 @@ function registerIpc(): void {
   });
 
   ipcMain.handle('persist:load', async () => {
+    rememberOpenedMedia(takeOpenedMediaBuffer());
     controlRendererReady = true;
     const settings = await readJsonFile<AppSettings>(settingsPath(), DEFAULT_SETTINGS);
     const openedPlaylist = pendingOpenedPlaylist;
+    const openedMedia = pendingOpenedMedia;
     pendingOpenedPlaylist = null;
+    pendingOpenedMedia = [];
     return {
       settings: normalizeSettings(settings) ?? DEFAULT_SETTINGS,
       openedPlaylist,
+      openedMedia,
     };
   });
 
@@ -970,7 +1035,7 @@ if (process.platform === 'win32') {
 
 app.on('open-file', (event, filePath) => {
   event.preventDefault();
-  void ingestPlaylistFile(filePath);
+  void ingestOpenedPath(filePath);
 });
 
 const isPrimaryInstance = !app.isPackaged || app.requestSingleInstanceLock();
@@ -979,8 +1044,7 @@ if (!isPrimaryInstance) {
 } else {
   if (app.isPackaged) {
     app.on('second-instance', (_event, argv) => {
-      const last = playlistPathsFromArgv(argv).at(-1);
-      if (last) void ingestPlaylistFile(last);
+      void ingestArgv(argv);
       if (controlPanelWindow && !controlPanelWindow.isDestroyed()) {
         if (controlPanelWindow.isMinimized()) controlPanelWindow.restore();
         controlPanelWindow.focus();
@@ -1000,10 +1064,7 @@ if (!isPrimaryInstance) {
       });
     }
     await removeLegacyPlaylist();
-    const launchPlaylist = playlistPathsFromArgv(process.argv).at(-1);
-    if (launchPlaylist) {
-      await ingestPlaylistFile(launchPlaylist);
-    }
+    await ingestArgv(process.argv);
     await createWindows();
   });
 

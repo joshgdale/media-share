@@ -88,6 +88,20 @@ export const IMAGE_EXTENSIONS = new Set([
   'bmp',
 ]);
 
+export const MEDIA_OPEN_MIME_TYPES = [
+  'video/mp4',
+  'video/quicktime',
+  'video/webm',
+  'video/x-matroska',
+  'video/x-msvideo',
+  'video/x-m4v',
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+  'image/bmp',
+];
+
 export const DEFAULT_PLAYER_STATE: PlayerState = {
   status: 'blank',
   currentCueId: null,
