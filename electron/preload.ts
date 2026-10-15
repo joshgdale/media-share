@@ -60,7 +60,7 @@ const api = {
   },
   confirmQuit: (): void => ipcRenderer.send('app:quit-confirm'),
   cancelQuit: (): void => ipcRenderer.send('app:quit-cancel'),
-  releaseQuitHold: (): void => ipcRenderer.send('app:quit-hold-release'),
+  cancelQuitHold: (): void => ipcRenderer.send('app:quit-hold-cancel'),
   onQuitEvent: (callback: (event: QuitEvent) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, data: QuitEvent) => {
       callback(data);

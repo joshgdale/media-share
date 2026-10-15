@@ -1,4 +1,5 @@
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
+import path from 'node:path';
 
 import { MakerDeb } from '@electron-forge/maker-deb';
 import { MakerDMG } from '@electron-forge/maker-dmg';
@@ -42,9 +43,11 @@ function packagerIcon(): string {
   }
 }
 
+const APP_NAME = 'Media Share';
+
 const config: ForgeConfig = {
   packagerConfig: {
-    name: 'Media Share',
+    name: APP_NAME,
     appBundleId: 'com.joshgdale.media-share',
     appCategoryType: 'public.app-category.video',
     asar: true,
@@ -134,7 +137,7 @@ const config: ForgeConfig = {
   makers: [
     new MakerZIP({}),
     new MakerDMG({
-      name: 'Media Share',
+      name: APP_NAME,
       format: 'ULFO',
       icon: 'icons/macos/icon.icns',
     }),
@@ -165,6 +168,20 @@ const config: ForgeConfig = {
   hooks: {
     generateAssets: async () => {
       execSync('npm run build', { stdio: 'inherit' });
+    },
+    prePackage: async (_config, platform, arch) => {
+      if (platform === 'darwin' && arch !== 'arm64') {
+        throw new Error(`macOS builds are Apple silicon (arm64) only; got "${arch}".`);
+      }
+    },
+    // Packaging rewrites Info.plist after Electron's ad-hoc signature, and a
+    // downloaded app with a broken signature is reported as "damaged".
+    postPackage: async (_config, { platform, outputPaths }) => {
+      if (platform !== 'darwin') return;
+      for (const outputPath of outputPaths) {
+        const app = path.join(outputPath, `${APP_NAME}.app`);
+        execFileSync('codesign', ['--force', '--deep', '--sign', '-', app], { stdio: 'inherit' });
+      }
     },
   },
 };

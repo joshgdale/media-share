@@ -27,11 +27,13 @@ interface MediaShareAPI {
   onPlayerFullscreen: (callback: (fullscreen: boolean) => void) => () => void;
   confirmQuit: () => void;
   cancelQuit: () => void;
-  releaseQuitHold: () => void;
+  cancelQuitHold: () => void;
   onQuitEvent: (callback: (event: QuitEvent) => void) => () => void;
 }
 
 declare global {
+  const __APP_VERSION__: string;
+
   interface Window {
     mediaShare: MediaShareAPI;
   }

@@ -8,6 +8,7 @@ import {
   nativeTheme,
   protocol,
   screen,
+  systemPreferences,
 } from 'electron';
 import { createReadStream, type ReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
@@ -68,7 +69,14 @@ let mediaPlayerWindow: BrowserWindow | null = null;
 let isQuitting = false;
 let allowQuit = false;
 let quitPromptVisible = false;
-let quitHoldTimer: ReturnType<typeof setTimeout> | null = null;
+
+interface QuitHold {
+  startedAt: number;
+  armed: boolean;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+let quitHold: QuitHold | null = null;
 let pendingOpenedPlaylist: unknown | null = null;
 let pendingOpenedMedia: string[] = [];
 let openedMediaFlush: ReturnType<typeof setTimeout> | null = null;
@@ -639,22 +647,64 @@ function revealControlPanel(): void {
 }
 
 function stopQuitHold(notify = true): void {
-  if (!quitHoldTimer) return;
-  clearTimeout(quitHoldTimer);
-  quitHoldTimer = null;
+  if (!quitHold) return;
+  clearTimeout(quitHold.timer);
+  quitHold = null;
   if (notify && quitPromptVisible) {
     sendQuitEvent({ type: 'hold-stop' });
     revealControlPanel();
   }
 }
 
-function startQuitHold(): boolean {
-  if (quitHoldTimer) return false;
-  quitHoldTimer = setTimeout(() => {
-    quitHoldTimer = null;
-    finishQuit();
-  }, QUIT_HOLD_MS);
-  return true;
+const KEY_REPEAT_TICK_MS = 15;
+const KEY_REPEAT_MAX_WAIT_MS = 2000;
+const KEY_REPEAT_SLACK_MS = 250;
+
+// Both defaults are absent until the user changes them in System Settings.
+function keyRepeatMs(key: 'InitialKeyRepeat' | 'KeyRepeat', fallbackMs: number): number {
+  const ticks = systemPreferences.getUserDefault(key, 'integer');
+  const ms = ticks > 0 ? ticks * KEY_REPEAT_TICK_MS : fallbackMs;
+  return Math.min(ms, KEY_REPEAT_MAX_WAIT_MS);
+}
+
+// A hold arms once both keys have stayed down for the full duration, and quits
+// when they are let go. Letting go any earlier cancels it.
+//
+// macOS never delivers the Q key-up while Command is still held, so releasing
+// only Q is invisible. On macOS, Q only counts as held while Command+Q keeps
+// auto-repeating: the hold arms on the first repeat past the duration, and the
+// repeats stopping is treated as Q being let go.
+function quitHoldDurationMs(): number {
+  if (process.platform !== 'darwin') return QUIT_HOLD_MS;
+  return Math.max(QUIT_HOLD_MS, keyRepeatMs('InitialKeyRepeat', 500));
+}
+
+function armQuitHoldTimer(firstPress: boolean): ReturnType<typeof setTimeout> {
+  if (process.platform !== 'darwin') {
+    return setTimeout(() => {
+      if (quitHold) quitHold.armed = true;
+    }, QUIT_HOLD_MS);
+  }
+  const wait = firstPress ? keyRepeatMs('InitialKeyRepeat', 500) : keyRepeatMs('KeyRepeat', 83);
+  return setTimeout(releaseQuitHold, wait + KEY_REPEAT_SLACK_MS);
+}
+
+function startQuitHold(): void {
+  if (quitHold) clearTimeout(quitHold.timer);
+  quitHold = { startedAt: Date.now(), armed: false, timer: armQuitHoldTimer(true) };
+}
+
+function continueQuitHold(): void {
+  if (!quitHold || process.platform !== 'darwin') return;
+  clearTimeout(quitHold.timer);
+  if (Date.now() - quitHold.startedAt >= QUIT_HOLD_MS) quitHold.armed = true;
+  quitHold.timer = armQuitHoldTimer(false);
+}
+
+function releaseQuitHold(): void {
+  if (!quitHold) return;
+  if (quitHold.armed) finishQuit();
+  else stopQuitHold();
 }
 
 function promptQuit(mode: 'confirm' | 'hold'): void {
@@ -665,11 +715,12 @@ function promptQuit(mode: 'confirm' | 'hold'): void {
   if (mode === 'confirm') revealControlPanel();
 
   if (mode === 'hold') {
-    const started = startQuitHold();
+    startQuitHold();
+    const durationMs = quitHoldDurationMs();
     if (!already) {
-      sendQuitEvent({ type: 'prompt', hold: true, durationMs: QUIT_HOLD_MS });
-    } else if (started) {
-      sendQuitEvent({ type: 'hold-start', durationMs: QUIT_HOLD_MS });
+      sendQuitEvent({ type: 'prompt', hold: true, durationMs });
+    } else {
+      sendQuitEvent({ type: 'hold-start', durationMs });
     }
     return;
   }
@@ -701,11 +752,15 @@ function inputKey(input: Electron.Input): string {
   return (input.key ?? '').toLowerCase();
 }
 
+function isQuitModifierHeld(input: Electron.Input): boolean {
+  return process.platform === 'darwin' ? input.meta : input.control;
+}
+
 function isQuitShortcut(input: Electron.Input): boolean {
   const key = inputKey(input);
   const isQ = key === 'q' || input.code === 'KeyQ';
   if (!isQ || input.shift || input.alt) return false;
-  return process.platform === 'darwin' ? input.meta : input.control;
+  return isQuitModifierHeld(input);
 }
 
 function attachQuitKeyListener(win: BrowserWindow): void {
@@ -728,12 +783,15 @@ function attachQuitKeyListener(win: BrowserWindow): void {
     if (isKeyDown(input) && isQuitShortcut(input)) {
       // Do not preventDefault: Chromium then drops the matching key-up
       // (https://github.com/electron/electron/issues/37336), so a tap looks like a hold.
-      if (!input.isAutoRepeat) promptQuit('hold');
+      if (input.isAutoRepeat) continueQuitHold();
+      else promptQuit('hold');
       return;
     }
-    if (!quitHoldTimer) return;
-    if (input.type === 'keyUp' || (isKeyDown(input) && inputKey(input) === 'escape')) {
+    if (!quitHold) return;
+    if (isKeyDown(input) && inputKey(input) === 'escape') {
       stopQuitHold();
+    } else if (input.type === 'keyUp' || !isQuitModifierHeld(input)) {
+      releaseQuitHold();
     }
   });
 }
@@ -792,6 +850,7 @@ async function createWindows(): Promise<void> {
   if (icon && process.platform === 'darwin') {
     app.dock?.setIcon(icon);
   }
+  const iconOption = icon ? { icon } : {};
   const webPreferences: Electron.WebPreferences = {
     preload,
     contextIsolation: true,
@@ -809,7 +868,7 @@ async function createWindows(): Promise<void> {
     minHeight: 640,
     backgroundColor: isDark ? '#0a0a0a' : '#f4f4f5',
     autoHideMenuBar: true,
-    icon,
+    ...iconOption,
     webPreferences,
   });
 
@@ -836,7 +895,7 @@ async function createWindows(): Promise<void> {
     resizable: false,
     autoHideMenuBar: true,
     backgroundColor: '#000000',
-    icon,
+    ...iconOption,
     webPreferences,
   });
 
@@ -904,10 +963,34 @@ async function createWindows(): Promise<void> {
   loadView(mediaPlayerWindow, 'media-player');
 }
 
+let lastDialogDirectory: string | undefined;
+
+function dialogStatePath(): string {
+  return path.join(app.getPath('userData'), 'dialogs.json');
+}
+
+async function loadDialogDirectory(): Promise<void> {
+  const state = await readJsonFile<{ directory?: unknown } | null>(dialogStatePath(), null);
+  if (typeof state?.directory === 'string') lastDialogDirectory = state.directory;
+}
+
+// Electron opens dialogs in Downloads unless given a path, so carry the last folder forward.
+function dialogDefaultPath(fileName?: string): string | undefined {
+  if (!lastDialogDirectory) return fileName;
+  return fileName ? path.join(lastDialogDirectory, fileName) : lastDialogDirectory;
+}
+
+function rememberDialogPath(filePath: string | undefined): void {
+  if (!filePath) return;
+  lastDialogDirectory = path.dirname(filePath);
+  void writeJsonFile(dialogStatePath(), { directory: lastDialogDirectory });
+}
+
 function registerIpc(): void {
   ipcMain.handle('media:pick-files', async () => {
     const result = await dialog.showOpenDialog({
       title: 'Add media',
+      defaultPath: dialogDefaultPath(),
       properties: ['openFile', 'multiSelections'],
       filters: [
         {
@@ -918,30 +1001,35 @@ function registerIpc(): void {
         { name: 'Images', extensions: IMAGE_DIALOG_EXTENSIONS },
       ],
     });
-    return result.canceled ? [] : result.filePaths;
+    if (result.canceled) return [];
+    rememberDialogPath(result.filePaths[0]);
+    return result.filePaths;
   });
 
   ipcMain.handle('media:pick-blank-image', async () => {
     const result = await dialog.showOpenDialog({
       title: 'Choose blank still',
+      defaultPath: dialogDefaultPath(),
       properties: ['openFile'],
       filters: [{ name: 'Images', extensions: IMAGE_DIALOG_EXTENSIONS }],
     });
     if (result.canceled || result.filePaths.length === 0) {
       return null;
     }
+    rememberDialogPath(result.filePaths[0]);
     return result.filePaths[0];
   });
 
   ipcMain.handle('playlist:export', async (_event, playlist: PlaylistData, settings: AppSettings) => {
     const result = await dialog.showSaveDialog({
       title: 'Save playlist',
-      defaultPath: playlistSaveFileName(playlist.name),
+      defaultPath: dialogDefaultPath(playlistSaveFileName(playlist.name)),
       filters: PLAYLIST_DIALOG_FILTERS,
     });
     if (result.canceled || !result.filePath) {
       return false;
     }
+    rememberDialogPath(result.filePath);
     await writeJsonFile(result.filePath, { ...playlist, settings });
     return true;
   });
@@ -949,12 +1037,14 @@ function registerIpc(): void {
   ipcMain.handle('playlist:import', async () => {
     const result = await dialog.showOpenDialog({
       title: 'Open playlist',
+      defaultPath: dialogDefaultPath(),
       properties: ['openFile'],
       filters: PLAYLIST_DIALOG_FILTERS,
     });
     if (result.canceled || result.filePaths.length === 0) {
       return null;
     }
+    rememberDialogPath(result.filePaths[0]);
     return readJsonFile<unknown>(result.filePaths[0], null);
   });
 
@@ -1023,7 +1113,7 @@ function registerIpc(): void {
     cancelQuitPrompt();
   });
 
-  ipcMain.on('app:quit-hold-release', () => {
+  ipcMain.on('app:quit-hold-cancel', () => {
     stopQuitHold();
   });
 }
@@ -1064,6 +1154,7 @@ if (!isPrimaryInstance) {
       });
     }
     await removeLegacyPlaylist();
+    await loadDialogDirectory();
     await ingestArgv(process.argv);
     await createWindows();
   });

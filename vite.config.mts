@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import electron from 'vite-plugin-electron/simple';
+import pkg from './package.json' with { type: 'json' };
 
 function electronSpawnEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
@@ -11,6 +12,9 @@ function electronSpawnEnv(): NodeJS.ProcessEnv {
 
 export default defineConfig({
   base: './',
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   plugins: [
     react(),
     tailwindcss(),

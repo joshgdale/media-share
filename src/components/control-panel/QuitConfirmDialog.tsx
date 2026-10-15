@@ -66,13 +66,9 @@ export function QuitConfirmDialog() {
 
   useEffect(() => {
     if (!open || !holding) return;
-    const release = () => window.mediaShare.releaseQuitHold();
-    window.addEventListener('keyup', release, true);
-    window.addEventListener('blur', release);
-    return () => {
-      window.removeEventListener('keyup', release, true);
-      window.removeEventListener('blur', release);
-    };
+    const cancel = () => window.mediaShare.cancelQuitHold();
+    window.addEventListener('blur', cancel);
+    return () => window.removeEventListener('blur', cancel);
   }, [open, holding]);
 
   function handleCancel(): void {
@@ -91,7 +87,8 @@ export function QuitConfirmDialog() {
       onConfirm={() => window.mediaShare.confirmQuit()}
     >
       Playback will stop and the output window will close. Hold{' '}
-      <ShortcutKeys keys={[modifier, 'Q']} /> to {action}, or click {actionLabel}.
+      <ShortcutKeys keys={[modifier, 'Q']} /> until {actionLabel} fills, then let go to {action},
+      or click {actionLabel}.
     </ConfirmDialog>
   );
 }

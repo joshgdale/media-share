@@ -99,6 +99,10 @@ export function SettingsModal({
               <BlankSettings settings={settings} onChange={onSettingsChange} />
             </div>
           </section>
+
+          <p className={`mt-5 text-center text-xs tabular-nums ${muted}`}>
+            Version {__APP_VERSION__}
+          </p>
         </DialogPanel>
       </div>
     </Dialog>

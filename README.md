@@ -33,6 +33,8 @@ When nothing is playing, the output shows whatever you’ve set as blank: a soli
 
 ## Getting started
 
+Needs Node.js 22.17 or newer.
+
 ```bash
 npm install
 npm run dev
@@ -64,25 +66,18 @@ By default the CPU architecture matches the machine you’re building on.
 
 ### macOS
 
-`package` leaves `Media Share.app` in `out/Media Share-darwin-arm64/` (or `…-x64/` / `…-universal/`). That’s the same thing you’d find inside `/Applications`. Copy it there, or run it from `out/`.
+Media Share for macOS is Apple silicon (`arm64`) only and needs macOS 13 or later. Build it on an Apple silicon Mac; `--arch=x64` and `--arch=universal` stop with an error.
+
+`package` leaves `Media Share.app` in `out/Media Share-darwin-arm64/`. That’s the same thing you’d find inside `/Applications`. Copy it there, or run it from `out/`.
 
 `make` also builds:
 
-- `out/make/Media Share.dmg` — a disk image. Open it and drag the app into Applications, the usual way Mac software is handed to someone else.
-- a zip under `out/make/zip/` — the same `.app`, compressed.
+- `out/make/dmg/arm64/Media Share.dmg` — a disk image. Open it and drag the app into Applications, the usual way Mac software is handed to someone else.
+- a zip under `out/make/zip/darwin/arm64/` — the same `.app`, compressed.
 
 The `.app` and the `.dmg` contain the same program. The `.app` is the app; the `.dmg` is just a wrapper that makes it obvious where to put it. You don’t need the DMG to run Media Share yourself.
 
-Apple Silicon is `arm64`. For an Intel Mac, or a single binary that runs on both:
-
-```bash
-npm run package -- --arch=x64
-npm run make -- --arch=x64
-npm run package -- --arch=universal
-npm run make -- --arch=universal
-```
-
-This build is not signed with an Apple Developer ID. First launch: right-click the app, choose **Open**, then confirm. After that, it opens normally.
+This build is not signed with an Apple Developer ID, so macOS blocks the first launch of a copy that was downloaded or AirDropped. Open the app once and choose **Done**, then go to **System Settings → Privacy & Security**, find the message about Media Share, and click **Open Anyway**. After that, it opens normally.
 
 ### Windows
 
